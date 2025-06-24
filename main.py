@@ -4,15 +4,16 @@ import asyncio
 from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, InputFile, BufferedInputFile
 from time import sleep
+from io import BytesIO
 import requests
 
 
 class PythonLessons:
     def __init__(self):
         self.headers = {"User-Agent":
-                            "Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.1.5) Gecko/20091102 Firefox/3.5.5 (.NET CLR 3.5.30729)"}
+                        "Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.1.5) Gecko/20091102 Firefox/3.5.5 (.NET CLR 3.5.30729)"}
         self.main_link = 'https://proproprogs.ru/'
         self.sections_dict = self.get_sections()
 
@@ -53,8 +54,9 @@ class PythonLessons:
         content = [p.get_text(strip=True).replace('\r\n', ' ') for p in div.find_all('p')[1:] if
                    not p.has_attr('style')]
 
-        return f"{title}\n\n{' '.join(content)[:1000]}" + f"\n\nСсылка на видеоурок: {rutube_link}"
-
+        text = f"{title}\n\n{' '.join(content)}"
+        video = f"\n\nСсылка на видеоурок: {rutube_link}"
+        return text, video
 
 class BotTG:
     def __init__(self):
@@ -63,6 +65,9 @@ class BotTG:
         self.lessons = None
         self.register_handlers()
         self.user_states = {}
+        self.button_yes = InlineKeyboardButton(text='Да',
+                                               url='https://code.mu/ru/python/tasker/stager/1/1/')
+        self.keyboard = InlineKeyboardMarkup(inline_keyboard=[[self.button_yes]])
 
     def register_handlers(self):
         self.lessons = PythonLessons()
@@ -106,10 +111,30 @@ class BotTG:
         if message.text not in subsections:
             await message.answer('На эту тему пока нет учебного материала')
         else:
-            link = subsections[message.text]
-            content = self.lessons.get_content(sect, message.text)
-            await message.answer(link)
-            await message.answer(content)
+            try:
+                content = self.lessons.get_content(sect, message.text)[0]
+                video_url = self.lessons.get_content(sect, message.text)[1]
+                file_data = BytesIO(content.encode('utf-8'))
+                file_data.name = f"{message.text}.txt"
+
+                input_file = BufferedInputFile(file=file_data.getvalue(), filename=f"{message.text}.txt")
+                await message.answer_document(input_file)
+                await message.answer(video_url)
+                await asyncio.sleep(3)
+                await message.answer(text='Хочешь решить задачи на пройденную тему?',
+                                     reply_markup=self.keyboard)
+            except Exception as e:
+                print(f"Ошибка при отправке файла: {e}")
+                await message.answer("Произошла ошибка при отправке файла")
+
+        # else:
+        #     link = subsections[message.text]
+        #     content = self.lessons.get_content(sect, message.text)
+        #     await message.answer(link)
+        #     await message.answer(content)
+        #     await asyncio.sleep(3)
+        #     await message.answer(text='Хочешь решить задачи на пройденную тему?',
+        #                          reply_markup=self.keyboard)
 
     async def run(self):
         try:
