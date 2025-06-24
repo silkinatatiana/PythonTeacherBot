@@ -1,0 +1,4 @@
+.idea/
+__pucache__/
+.env
+config.py
