@@ -1,19 +1,21 @@
 from config import Config
+from db import DataBase
 
 import asyncio
 from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, InputFile, BufferedInputFile
-from time import sleep
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from io import BytesIO
+from time import sleep
 import requests
+import random
 
 
 class PythonLessons:
     def __init__(self):
         self.headers = {"User-Agent":
-                        "Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.1.5) Gecko/20091102 Firefox/3.5.5 (.NET CLR 3.5.30729)"}
+                            "Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.1.5) Gecko/20091102 Firefox/3.5.5 (.NET CLR 3.5.30729)"}
         self.main_link = 'https://proproprogs.ru/'
         self.sections_dict = self.get_sections()
 
@@ -52,11 +54,12 @@ class PythonLessons:
         title = div.find('h1').text.strip()
         rutube_link = div.find('div', class_='title').find_all('a', href=True)[1]['href']
         content = [p.get_text(strip=True).replace('\r\n', ' ') for p in div.find_all('p')[1:] if
-                   not p.has_attr('style')]
+                   not p.has_attr('style') and '#' not in p.text]
 
         text = f"{title}\n\n{' '.join(content)}"
         video = f"\n\nСсылка на видеоурок: {rutube_link}"
         return text, video
+
 
 class BotTG:
     def __init__(self):
@@ -65,9 +68,7 @@ class BotTG:
         self.lessons = None
         self.register_handlers()
         self.user_states = {}
-        self.button_yes = InlineKeyboardButton(text='Да',
-                                               url='https://code.mu/ru/python/tasker/stager/1/1/')
-        self.keyboard = InlineKeyboardMarkup(inline_keyboard=[[self.button_yes]])
+        self.db_instance = DataBase()
 
     def register_handlers(self):
         self.lessons = PythonLessons()
@@ -105,36 +106,36 @@ class BotTG:
             await message.answer("Сначала выберите раздел через /sections")
             return
 
-        sect = self.user_states[user_id]
-        subsections = self.lessons.get_sections()[sect]
+        section = self.user_states[user_id]
+        subsection = message.text
+        all_subsections = self.lessons.get_sections()[section]
 
-        if message.text not in subsections:
+        if subsection not in all_subsections:
             await message.answer('На эту тему пока нет учебного материала')
         else:
-            try:
-                content = self.lessons.get_content(sect, message.text)[0]
-                video_url = self.lessons.get_content(sect, message.text)[1]
-                file_data = BytesIO(content.encode('utf-8'))
-                file_data.name = f"{message.text}.txt"
+            content, video_url = self.lessons.get_content(section, subsection)
+            file_data = BytesIO(content.encode('utf-8'))
+            file_data.name = f"{subsection}.txt"
 
-                input_file = BufferedInputFile(file=file_data.getvalue(), filename=f"{message.text}.txt")
-                await message.answer_document(input_file)
+            input_file = BufferedInputFile(file=file_data.getvalue(), filename=f"{subsection}.txt")
+            await message.answer_document(input_file)
+            if video_url:
                 await message.answer(video_url)
-                await asyncio.sleep(3)
-                await message.answer(text='Хочешь решить задачи на пройденную тему?',
-                                     reply_markup=self.keyboard)
-            except Exception as e:
-                print(f"Ошибка при отправке файла: {e}")
-                await message.answer("Произошла ошибка при отправке файла")
-
-        # else:
-        #     link = subsections[message.text]
-        #     content = self.lessons.get_content(sect, message.text)
-        #     await message.answer(link)
-        #     await message.answer(content)
-        #     await asyncio.sleep(3)
-        #     await message.answer(text='Хочешь решить задачи на пройденную тему?',
-        #                          reply_markup=self.keyboard)
+            await asyncio.sleep(3)
+            
+            tasks = await asyncio.to_thread(
+                self.db_instance.show_table,
+                section=section,
+                subsection=subsection
+            )
+            if tasks:
+                random_task = random.choice(tasks)
+                button_yes = InlineKeyboardButton(text='Да',
+                                                callback_data=f"task_{random_task[0]}")
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[[button_yes]])
+                await message.answer(
+                    text='Хочешь решить задачи на пройденную тему?',
+                    reply_markup=keyboard)
 
     async def run(self):
         try:
