@@ -1,15 +1,15 @@
 from config import Config
-from db import DataBase
+from db import DataBase, UserStates
 
+import asyncpg
 import asyncio
 from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
+from aiogram.types import Message, BufferedInputFile, ReplyKeyboardMarkup, KeyboardButton
 from io import BytesIO
 from time import sleep
 import requests
-import random
 
 
 class PythonLessons:
@@ -20,7 +20,6 @@ class PythonLessons:
         self.sections_dict = self.get_sections()
 
     def get_sections(self):
-        """Получаем ссылки на названия разделов и ссылки на них"""
         sections_dict = {}
         response = requests.get(self.main_link + 'python_base/', self.headers)
         soup = BeautifulSoup(response.text, 'lxml')
@@ -54,7 +53,7 @@ class PythonLessons:
         title = div.find('h1').text.strip()
         rutube_link = div.find('div', class_='title').find_all('a', href=True)[1]['href']
         content = [p.get_text(strip=True).replace('\r\n', ' ') for p in div.find_all('p')[1:] if
-                   not p.has_attr('style') and '#' not in p.text]
+                   not p.has_attr('style') and not p.has_attr('class')]
 
         text = f"{title}\n\n{' '.join(content)}"
         video = f"\n\nСсылка на видеоурок: {rutube_link}"
@@ -66,9 +65,24 @@ class BotTG:
         self.bot = Bot(Config.TOKEN)
         self.dp = Dispatcher()
         self.lessons = None
-        self.register_handlers()
         self.user_states = {}
-        self.db_instance = DataBase()
+        self.db = DataBase()
+        self.users = UserStates(self.db)
+        self.pool = None
+
+        self.register_handlers()
+        self.dp.startup.register(self.on_startup)
+
+    async def on_startup(self):
+        self.pool = await asyncpg.create_pool(
+            user=Config.DB_USER,
+            password=Config.DB_PASSWORD,
+            database=Config.DB_NAME,
+            host=Config.DB_HOST
+        )
+        await self.db.create_pool(self.pool)
+        await self.users.create_table()
+        print("Бот успешно запущен и подключен к PostgreSQL!")
 
     def register_handlers(self):
         self.lessons = PythonLessons()
@@ -122,29 +136,41 @@ class BotTG:
             if video_url:
                 await message.answer(video_url)
             await asyncio.sleep(3)
-            
-            tasks = await asyncio.to_thread(
-                self.db_instance.show_table,
-                section=section,
-                subsection=subsection
-            )
+
+            tasks = await self.db.show_table(section=section, subsection=subsection)
+
             if tasks:
-                random_task = random.choice(tasks)
-                button_yes = InlineKeyboardButton(text='Да',
-                                                callback_data=f"task_{random_task[0]}")
-                keyboard = InlineKeyboardMarkup(inline_keyboard=[[button_yes]])
-                await message.answer(
-                    text='Хочешь решить задачи на пройденную тему?',
-                    reply_markup=keyboard)
+                await message.answer("Хочешь решить задачи на пройденную тему?",
+                                     reply_markup=self.create_button())
+
+                await self.users.update_status(
+                    user_id=user_id,
+                    status="awaiting_task_decision",
+                    section=section,
+                    subsection=subsection
+                )
+
+    def create_button(self):
+        yes_no_kb = ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="Да"), KeyboardButton(text="Нет")]
+            ],
+            resize_keyboard=True,
+            one_time_keyboard=True
+        )
+        return yes_no_kb
+
+        # TODO да/нет если нет, то предлагаем выбрать тему из другой секции + /section (в бд меняется состояние)
 
     async def run(self):
         try:
-            print("Бот успешно запущен!")
             await self.dp.start_polling(self.bot)
         except asyncio.CancelledError:
             pass
         finally:
             await self.bot.session.close()
+            if self.pool:
+                await self.pool.close()
 
 
 async def main():
